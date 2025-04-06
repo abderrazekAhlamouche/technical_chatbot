@@ -3,57 +3,56 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain.document_loaders import TextLoader
+import os
 
 def clean_technical_text(text):
     """Pre-process technical manual text"""
-    # Remove section numbers (e.g., "16 Configuring NTP...")
     text = re.sub(r"^\d+\s", "", text)
-    # Collapse multiple newlines
     text = re.sub(r"\n+", " ", text)
-    # Remove excessive whitespace
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
-def create_embeddings(text_path):
-    """Process technical manual into optimized embeddings"""
-    print(f"Loading technical manual from: {text_path}")
+def create_embeddings(text_path, embedding_model_path="./models", vectorstore_path="./vectorstore"):
+    """Create and save embeddings locally"""
     
     # Load and clean document
     loader = TextLoader(text_path)
     raw_docs = loader.load()
     
-    # Pre-process text
     for doc in raw_docs:
         doc.page_content = clean_technical_text(doc.page_content)
     
-    # Technical manual optimized splitter
+    # Split text
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=400,  # Ideal for technical paragraphs
-        chunk_overlap=80,  # Maintains context
+        chunk_size=400,
+        chunk_overlap=80,
         separators=["\n• ", "\n", ". ", "; ", " ", ""],
-        length_function=len
     )
-    
     chunks = text_splitter.split_documents(raw_docs)
-    print(f"Created {len(chunks)} technical document chunks")
     
-    # Verify chunk quality
-    print("\nSample processed chunk:")
-    print(chunks[0].page_content[:200] + "...")
-    
-    # Create embeddings optimized for technical terms
+    # Load local embeddings (download model first if needed)
     embeddings = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2",
+        cache_folder=embedding_model_path,  # Store model locally
         model_kwargs={'device': 'cpu'},
-        encode_kwargs={'normalize_embeddings': True}  # Better for technical similarity
+        encode_kwargs={'normalize_embeddings': True}
     )
     
-    # Create vectorstore with MMR indexing
-    vectorstore = FAISS.from_documents(
-        chunks, 
-        embeddings,
-        distance_strategy="COSINE"  # Best for technical similarity
-    )
+    # Create and save vectorstore locally
+    vectorstore = FAISS.from_documents(chunks, embeddings)
     
-    print(f"\nVectorstore created with {vectorstore.index.ntotal} entries")
+    # Save embeddings to disk
+    os.makedirs(vectorstore_path, exist_ok=True)
+    vectorstore.save_local(vectorstore_path)
+    print(f"Vectorstore saved to {vectorstore_path}")
+    return vectorstore
+
+def load_embeddings(vectorstore_path="./vectorstore", embedding_model_path="./models"):
+    """Load pre-computed embeddings from disk"""
+    embeddings = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2",
+        cache_folder=embedding_model_path,
+        model_kwargs={'device': 'cpu'},
+    )
+    vectorstore = FAISS.load_local(vectorstore_path, embeddings)
     return vectorstore
