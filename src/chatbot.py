@@ -1,85 +1,91 @@
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from langchain_community.llms import HuggingFacePipeline
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, pipeline
-from pathlib import Path
-               
-TECHNICAL_PROMPT = """Extract the exact technical specification from this documentation:
+from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
 
+CXX_PROMPT = """You are a C++ documentation expert. Provide responses in this exact format:
+
+For syntax: [SYNTAX] <exact syntax>
+For examples: [EXAMPLE] <complete example>
+For definitions: [DEFINITION] <explanation>
+
+If the information cannot be found, respond: "Not found in documentation"
+
+Context:
 {context}
 
 Question: {question}
 
-Answer ONLY with the specific technical details requested. If unavailable, respond "Not specified in documentation"."""
+Answer:"""
 
 def setup_chatbot(vectorstore):
-    # Get the absolute path to the model
-    model_dir = Path("./models/models--google--flan-t5-base/snapshots/")
-    snapshots = list(model_dir.glob("*"))
-    
-    if not snapshots:
-        raise FileNotFoundError(
-            f"No model snapshot found in {model_dir}\n"
-            f"Expected folder structure: models/models--google--flan-t5-base/snapshots/<hash>"
-        )
-    
-    model_path = str(snapshots[0])  # Use the first snapshot
-    
     try:
-        # Load tokenizer and model locally
-        tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
-        model = AutoModelForSeq2SeqLM.from_pretrained(model_path, local_files_only=True)
+        tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base")
+        model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base")
         
         pipe = pipeline(
             "text2text-generation",
             model=model,
             tokenizer=tokenizer,
-            max_length=150,
-            temperature=0.0
+            max_length=300,
+            temperature=0.1,
+            do_sample=True,
+            top_p=0.9,
+            repetition_penalty=1.2
         )
         
-        # ... rest of your existing code ...
+        llm = HuggingFacePipeline(pipeline=pipe)
         
+        return RetrievalQA.from_chain_type(
+            llm=llm,
+            chain_type="stuff",
+            retriever=vectorstore.as_retriever(
+                search_kwargs={
+                    "k": 4,
+                    "score_threshold": 0.75,
+                    "search_type": "mmr"  # Maximal Marginal Relevance
+                }
+            ),
+            chain_type_kwargs={
+                "prompt": PromptTemplate(
+                    template=CXX_PROMPT,
+                    input_variables=["context", "question"]
+                )
+            },
+            return_source_documents=True
+        )
     except Exception as e:
-        print(f"\nERROR: Failed to load local model from {model_path}")
-        print("Verify these files exist:")
-        print(f"- {model_path}/config.json")
-        print(f"- {model_path}/pytorch_model.bin")
-        print(f"- {model_path}/tokenizer_config.json")
-        raise e
+        print(f"Failed to initialize chatbot: {str(e)}")
+        raise
+
+def format_response(response, query):
+    """Strict response formatting"""
+    answer = response["result"].split("Source Context:")[0].strip()
     
-    llm = HuggingFacePipeline(pipeline=pipe)
+    # Force standard formats
+    if "example" in query.lower() and not answer.startswith("[EXAMPLE]"):
+        answer = f"[EXAMPLE]\n{answer}"
+    elif ("syntax" in query.lower() or "declare" in query.lower()) and not answer.startswith("[SYNTAX]"):
+        answer = f"[SYNTAX]\n{answer}"
     
-    PROMPT = PromptTemplate(
-        template=TECHNICAL_PROMPT,
-        input_variables=["context", "question"]
-    )
-    
-    return RetrievalQA.from_chain_type(
-        llm=llm,
-        chain_type="stuff",
-        retriever=vectorstore.as_retriever(
-            search_kwargs={"k": 2}  # Only top 2 most relevant chunks
-        ),
-        chain_type_kwargs={"prompt": PROMPT}
-    )
+    return answer if answer else "Not found in documentation"
 
 def run_chatbot(qa_system):
-    print("Technical Documentation Expert ready:")
+    print("C++ Documentation Expert ready. Ask your questions:")
     while True:
-        query = input("\nYour technical question: ").strip()
-        if query.lower() == 'exit':
+        query = input("\n> ").strip()
+        if query.lower() in ('exit', 'quit'):
             break
         
         try:
             result = qa_system.invoke({"query": query})
-            answer = result["result"].strip()
+            print(f"\n{format_response(result, query)}")
             
-            # Clean up bullet points and numbering
-            if answer.startswith(("1.", "- ", "* ")):
-                answer = answer.split("\n")[0][2:].strip()
-                
-            print(f"\nANSWER: {answer}")
-            
+            # Show context snippets if needed
+            if result.get('source_documents'):
+                print("\n[Relevant Documentation Context]")
+                for i, doc in enumerate(result['source_documents'][:2], 1):
+                    print(f"{i}. {doc.page_content[:200]}...")
+                    
         except Exception as e:
-            print(f"\nSYSTEM ERROR: Please rephrase your question")
+            print(f"\nError processing query: {str(e)}")
