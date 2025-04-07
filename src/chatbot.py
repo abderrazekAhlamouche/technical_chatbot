@@ -58,3 +58,16 @@ def setup_chatbot(vectorstore, model_name: str = "google/flan-t5-base", device: 
     except Exception as e:
         logger.error(f"Error setting up chatbot: {e}")
         raise
+
+def run_chatbot(qa_system):
+    """Run the chatbot interaction loop."""
+    try:
+        while True:
+            question = input("Ask a question (or type 'exit' to quit): ")
+            if question.lower() == 'exit':
+                break
+            answer = qa_system({"question": question})
+            print(f"Answer: {answer['result']}")
+    except Exception as e:
+        logger.error(f"Error running chatbot: {e}")
+        raise
