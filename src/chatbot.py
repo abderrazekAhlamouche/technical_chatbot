@@ -1,5 +1,5 @@
 import logging
-from langchain.chains import RetrievalQAChain
+from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from langchain_community.llms import HuggingFacePipeline
 from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
@@ -46,8 +46,9 @@ def setup_chatbot(vectorstore, model_name: str = "google/flan-t5-base", device: 
             template=CXX_PROMPT
         )
         
-        qa_chain = RetrievalQAChain.from_llm(
+        qa_chain = RetrievalQA.from_chain_type(
             retriever=vectorstore.as_retriever(),
+            chain_type="stuff",
             llm=HuggingFacePipeline(pipeline=pipe),
             prompt_template=prompt_template
         )
